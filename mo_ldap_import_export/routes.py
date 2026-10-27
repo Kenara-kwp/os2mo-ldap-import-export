@@ -280,9 +280,13 @@ async def get_non_existing_unique_ldap_uuids(
 
 
 async def get_addresses_governed_by_ldap(
-    gql_client: GraphQLClient, address_type_user_keys: list[str]
+    gql_client: GraphQLClient, address_type_user_keys: list[str], itsystem_user_key: str | None = None
 ) -> list[AddressValidation]:
     filter = AddressFilter(address_type_user_keys=address_type_user_keys)
+    if itsystem_user_key is not None:
+        filter.ituser = ITUserFilter(
+            itsystem=ITSystemFilter(user_keys=[itsystem_user_key])
+        )
     find_addresses = partial(gql_client.read_orphaned_addresses, filter)
 
     return [
@@ -295,12 +299,14 @@ async def find_orphaned_addresses(
     dataloader: DataLoader,
     settings: Settings,
     ldap_connection: Connection,
+    force_deletion: bool = False,
+    itsystem_user_key: str | None = None,
 ) -> list[AddressValidation]:
     # split for readability, and further development
     mo_address_validations: list[
         AddressValidation
     ] = await get_addresses_governed_by_ldap(
-        dataloader.moapi.graphql_client, address_type_user_keys_to_clean
+        dataloader.moapi.graphql_client, address_type_user_keys_to_clean, itsystem_user_key
     )
     logger.debug(
         "Orphaned Address cleanup, addresses from MO", count=len(mo_address_validations)
@@ -330,7 +336,7 @@ async def find_orphaned_addresses(
             )
             validation.set_for_deletion = True
 
-    if all(validation.set_for_deletion for validation in mo_address_validations):
+    if not force_deletion and all(validation.set_for_deletion for validation in mo_address_validations):
         raise HTTPException(
             status_code=409,
             detail="All addresses are set for deletion, aborting to avoid mass deletion",
@@ -777,6 +783,8 @@ def construct_router(settings: Settings) -> APIRouter:
             list[str], Query()
         ],
         dry_run: bool = True,
+        itsystem_user_key: str | None = None,
+        force_deletion: bool = False,
     ) -> list[str]:
         address_type_user_keys_filtered = (
             list(filter(None, address_type_user_keys))
@@ -791,6 +799,8 @@ def construct_router(settings: Settings) -> APIRouter:
             settings=settings,
             ldap_connection=ldap_connection,
             address_type_user_keys_to_clean=address_type_user_keys_filtered,
+            force_deletion=force_deletion,
+            itsystem_user_key=itsystem_user_key
         )
 
         if not dry_run:
