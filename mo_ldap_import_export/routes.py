@@ -52,7 +52,6 @@ from .config import Settings
 from .dataloaders import DataLoader
 from .dataloaders import NoGoodLDAPAccountFound
 from .exceptions import DryRunException
-from .ldap import apply_discriminator
 from .ldap import filter_dns
 from .ldap import get_ldap_object
 from .ldap import object_search
@@ -1012,48 +1011,6 @@ def construct_router(settings: Settings) -> APIRouter:
             raise HTTPException(status_code=404, detail="No DNs found")
 
         best_object = dn_map[best_dn]
-        return {
-            "dn": best_object.dn,
-            # UUID parsed and then stringifed to handle ADs non-standard UUID formatting
-            "uuid": str(UUID(getattr(best_object, settings.ldap_unique_id_field))),
-            # Username list shenanigans to handle ADs non-standard list formatting
-            "username": one(ensure_list(getattr(best_object, account_name))),
-        }
-
-    # Transitory endpoint to reimplementing cpr_uuid.py using this integration
-    # TODO: Can be removed once the cpr_uuid.py script is no longer needed
-    @router.get("/CPRUUID", status_code=200, tags=["LDAP"])
-    async def load_cpr_uuid_data(
-        settings: depends.Settings,
-        ldap_connection: depends.Connection,
-        dataloader: depends.DataLoader,
-        uuid: EmployeeUUID,
-    ) -> dict[str, str]:  # pragma: no cover
-        account_name = "uid"
-        # Handle ADs non-standard username field
-        if settings.ldap_dialect == "AD":
-            account_name = "sAMAccountName"
-        # Setting for UUID field to handle ADs non-standard entryUUID field
-        attributes = {settings.ldap_unique_id_field, account_name}
-
-        # Fetch discriminator fields
-        if settings.discriminator_fields:  # pragma: no cover
-            attributes.update(settings.discriminator_fields)
-
-        ldap_objects = await dataloader.find_mo_employee_dn(uuid, attributes)
-        ldap_objects = await filter_dns(settings, ldap_objects)
-        dns = {obj.dn for obj in ldap_objects}
-        if not dns:
-            logger.info("Found no DNs for cpr_number")
-            raise HTTPException(status_code=404, detail="No DNs found for CPR number")
-
-        best_object = await apply_discriminator(
-            settings, ldap_connection, dataloader.moapi, uuid, ldap_objects
-        )
-        if best_object is None:
-            logger.info("No DNs survived discriminator")
-            raise HTTPException(status_code=404, detail="No DNs survived discriminator")
-
         return {
             "dn": best_object.dn,
             # UUID parsed and then stringifed to handle ADs non-standard UUID formatting
